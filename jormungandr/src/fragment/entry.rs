@@ -3,6 +3,26 @@ use crate::{
     fragment::{Fragment, FragmentId},
 };
 use std::time::SystemTime;
+use thiserror::Error;
+
+#[derive(Debug, Clone, Error)]
+pub enum EntryError {
+    #[error("Error computing the balance: {source}")]
+    ErrorComputingBalance {
+        #[source]
+        #[from]
+        source: ValueError,
+    },
+
+    #[error("Initial Fragments are not accepted outside the block0")]
+    InitialRejected,
+
+    #[error("Old UTxO Declaration Fragments are not accepted outside of the block0")]
+    OldUTxORejected,
+
+    #[error("Transaction has negative balance: {balance}")]
+    NegativeBalance { balance: Value },
+}
 
 pub struct PoolEntry {
     // reference of the fragment stored in the pool
@@ -14,47 +34,44 @@ pub struct PoolEntry {
     fragment_size: usize,
     /// time when the entry was added to the pool
     received_at: SystemTime,
-    /// the fee of the accumulated descendant fragments
-    /// does not include the fee of this entry
-    descendants_fee: Value,
-    /// the size of the accumulated descendant fragments
-    /// Does not include the size of this entry
-    descendants_size: usize,
-    /// the fee of the accumulated ancestor fragments
-    /// does not include the fee of this entry
-    ancestors_fee: Value,
-    /// the size of the accumulated ancestor fragments
-    /// Does not include the size of this entry
-    ancestors_size: usize,
+}
+
+fn estimate_fee(fragment: &Fragment) -> Result<Value, EntryError> {
+    use chain_impl_mockchain::transaction::Balance;
+    let balance = match fragment {
+        Fragment::Initial(_) => return Err(EntryError::InitialRejected),
+        Fragment::OldUtxoDeclaration(_) => return Err(EntryError::OldUTxORejected),
+        Fragment::UpdateProposal(_) => unimplemented!(),
+        Fragment::UpdateVote(_) => unimplemented!(),
+
+        Fragment::Transaction(tx) => tx.balance(Value::zero())?,
+        Fragment::OwnerStakeDelegation(tx) => tx.balance(Value::zero())?,
+        Fragment::StakeDelegation(tx) => tx.balance(Value::zero())?,
+        Fragment::PoolRegistration(tx) => tx.balance(Value::zero())?,
+        Fragment::PoolRetirement(tx) => tx.balance(Value::zero())?,
+        Fragment::PoolUpdate(tx) => tx.balance(Value::zero())?,
+    };
+
+    match balance {
+        Balance::Zero => Ok(Value::zero()),
+        Balance::Positive(v) => Ok(v),
+        Balance::Negative(v) => Err(EntryError::NegativeBalance { balance: v }),
+    }
 }
 
 impl PoolEntry {
-    pub fn new(fragment: &Fragment) -> Self {
+    pub fn new(fragment: &Fragment) -> Result<Self, EntryError> {
+        let fragment_fee = estimate_fee(fragment)?;
         let raw = fragment.to_raw();
         let fragment_size = raw.size_bytes_plus_size();
         let fragment_ref = raw.id();
-        // TODO: the fragment fee is not yet computed. Yet we should
-        // have an explicit fee in the message. So we need to be able
-        // to extract this information without the need to compute the
-        // fee from the ledger's fee settings.
-        let fragment_fee = Value::zero();
 
-        PoolEntry {
+        Ok(PoolEntry {
             fragment_ref: fragment_ref,
             fragment_fee: fragment_fee,
             fragment_size: fragment_size,
             received_at: SystemTime::now(),
-
-            // when this entry is added in the pool, it has no
-            // descendant
-            descendants_fee: Value::zero(),
-            descendants_size: 0usize,
-
-            // when this entry is added to the pool, we need to know
-            // about the different entries in order to compute the following:
-            ancestors_fee: Value::zero(),
-            ancestors_size: 0usize,
-        }
+        })
     }
 
     #[inline]
@@ -72,21 +89,5 @@ impl PoolEntry {
     #[inline]
     pub fn received_at(&self) -> &SystemTime {
         &self.received_at
-    }
-    #[inline]
-    pub fn with_descendants_fee(&self) -> Result<Value, ValueError> {
-        self.descendants_fee + self.fragment_fee
-    }
-    #[inline]
-    pub fn with_descendants_size(&self) -> usize {
-        self.descendants_size + self.fragment_size
-    }
-    #[inline]
-    pub fn with_ancestors_fee(&self) -> Result<Value, ValueError> {
-        self.ancestors_fee + self.fragment_fee
-    }
-    #[inline]
-    pub fn with_ancestors_size(&self) -> usize {
-        self.ancestors_size + self.fragment_size
     }
 }

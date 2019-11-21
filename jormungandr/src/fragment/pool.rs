@@ -187,7 +187,7 @@ pub(super) mod internal {
                 Entry::Occupied(_) => return None,
                 Entry::Vacant(vacant) => vacant,
             };
-            let pool_entry = Arc::new(PoolEntry::new(&fragment));
+            let pool_entry = Arc::new(PoolEntry::new(&fragment).ok()?);
             let delay = self.expirations.insert(fragment_id, self.ttl);
             entry.insert((pool_entry, fragment.clone(), delay));
             self.entries_by_time.push_back(fragment_id);
