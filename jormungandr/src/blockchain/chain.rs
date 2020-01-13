@@ -59,7 +59,7 @@ use crate::{
     start_up::NodeStorage,
 };
 use chain_impl_mockchain::{leadership::Verification, ledger};
-use chain_storage::error::Error as StorageError;
+use chain_storage_sqlite_old::Error as StorageError;
 use chain_time::TimeFrame;
 use std::{convert::Infallible, sync::Arc, time::Duration};
 use tokio::prelude::*;

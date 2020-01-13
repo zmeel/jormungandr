@@ -7,12 +7,11 @@ use crate::{
     network,
     settings::start::Settings,
 };
-use chain_storage::store::BlockStore;
-use chain_storage_sqlite_old::SQLiteBlockStore;
+use chain_storage_sqlite_old::BlockStore;
 use slog::Logger;
 use std::time::Duration;
 
-pub type NodeStorage = SQLiteBlockStore<Block>;
+pub type NodeStorage = BlockStore<Block>;
 
 /// prepare the block storage from the given settings
 ///
@@ -20,7 +19,7 @@ pub fn prepare_storage(setting: &Settings, logger: &Logger) -> Result<NodeStorag
     match &setting.storage {
         None => {
             info!(logger, "storing blockchain in memory");
-            Ok(SQLiteBlockStore::new("file::memory:?cache=shared"))
+            Ok(BlockStore::memory())
         }
         Some(dir) => {
             std::fs::create_dir_all(dir).map_err(|err| Error::IO {
@@ -30,7 +29,7 @@ pub fn prepare_storage(setting: &Settings, logger: &Logger) -> Result<NodeStorag
             let mut sqlite = dir.clone();
             sqlite.push("blocks.sqlite");
             info!(logger, "storing blockchain in '{:?}'", sqlite);
-            Ok(SQLiteBlockStore::new(sqlite))
+            Ok(BlockStore::file(sqlite))
         }
     }
 }

@@ -2,12 +2,12 @@ use crate::{
     blockcfg::{Block, HeaderHash},
     start_up::NodeStorage,
 };
-use chain_storage::store::{for_path_to_nth_ancestor, BlockInfo, BlockStore};
+use chain_storage_sqlite_old::{for_path_to_nth_ancestor, BlockInfo};
 use tokio::prelude::future::Either;
 use tokio::prelude::*;
 use tokio::sync::lock::Lock;
 
-pub use chain_storage::error::Error as StorageError;
+pub use chain_storage_sqlite_old::Error as StorageError;
 
 #[derive(Clone)]
 pub struct Storage {
@@ -32,8 +32,8 @@ pub struct Ancestor {
 }
 
 struct BlockIterState {
-    to_depth: u64,
-    cur_depth: u64,
+    to_length: u64,
+    cur_length: u64,
     pending_infos: Vec<BlockInfo<HeaderHash>>,
 }
 
@@ -156,7 +156,7 @@ impl Storage {
         E: From<StorageError>,
     {
         let res = self.read_connection.get_block_info(&to).map(|to_info| {
-            let depth = depth.unwrap_or(to_info.depth - 1);
+            let depth = depth.unwrap_or(to_info.chain_length - 1);
             BlockIterState::new(to_info, depth)
         });
 
@@ -242,38 +242,38 @@ impl Stream for BlockStream {
 impl BlockIterState {
     fn new(to_info: BlockInfo<HeaderHash>, distance: u64) -> Self {
         BlockIterState {
-            to_depth: to_info.depth,
-            cur_depth: to_info.depth - distance,
+            to_length: to_info.chain_length,
+            cur_length: to_info.chain_length - distance,
             pending_infos: vec![to_info],
         }
     }
 
     fn has_next(&self) -> bool {
-        self.cur_depth < self.to_depth
+        self.cur_length < self.to_length
     }
 
     fn get_next(&mut self, store: &mut NodeStorage) -> Result<Block, StorageError> {
         assert!(self.has_next());
 
-        self.cur_depth += 1;
+        self.cur_length += 1;
 
         let block_info = self.pending_infos.pop().unwrap();
 
-        if block_info.depth == self.cur_depth {
+        if block_info.chain_length == self.cur_length {
             // We've seen this block on a previous ancestor traversal.
             let (block, _block_info) = store.get_block(&block_info.block_hash)?;
             Ok(block)
         } else {
             // We don't have this block yet, so search back from
             // the furthest block that we do have.
-            assert!(self.cur_depth < block_info.depth);
-            let depth = block_info.depth;
+            assert!(self.cur_length < block_info.chain_length);
+            let chain_length = block_info.chain_length;
             let parent = block_info.parent_id();
             self.pending_infos.push(block_info);
             let block_info = for_path_to_nth_ancestor(
                 &*store,
                 &parent,
-                depth - self.cur_depth - 1,
+                chain_length - self.cur_length - 1,
                 |new_info| {
                     self.pending_infos.push(new_info.clone());
                 },

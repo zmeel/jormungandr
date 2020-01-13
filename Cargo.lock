@@ -479,10 +479,10 @@ name = "chain-storage-sqlite-old"
 version = "0.1.0"
 dependencies = [
  "chain-core 0.1.0",
- "chain-storage 0.1.0",
  "r2d2 0.8.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "r2d2_sqlite 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rusqlite 0.16.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 1.0.9 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
