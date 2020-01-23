@@ -11,6 +11,7 @@ use chain_storage::store::BlockStore;
 use chain_storage_sqlite_old::{SQLiteBlockStore, SQLiteBlockStoreConnection};
 use slog::Logger;
 use std::time::Duration;
+use futures_03::executor::block_on;
 
 pub type NodeStorage = SQLiteBlockStore;
 pub type NodeStorageConnection = SQLiteBlockStoreConnection<Block>;
@@ -93,11 +94,11 @@ pub fn load_blockchain(
 ) -> Result<(Blockchain, Tip), Error> {
     use tokio::prelude::*;
 
-    let blockchain = Blockchain::new(block0.header.hash(), storage, block_cache_ttl);
+    let blockchain = block_on(Blockchain::new(block0.header.hash(), storage, block_cache_ttl));
 
-    let main_branch: Branch = match blockchain.load_from_block0(block0.clone()).wait() {
+    let main_branch: Branch = match block_on(blockchain.load_from_block0(block0.clone())) {
         Err(error) => match error.kind() {
-            BlockchainError::Block0AlreadyInStorage => blockchain.load_from_storage(block0).wait(),
+            BlockchainError::Block0AlreadyInStorage => block_on(blockchain.load_from_storage(block0)),
             _ => Err(error),
         },
         Ok(branch) => Ok(branch),

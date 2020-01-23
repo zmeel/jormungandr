@@ -4,9 +4,10 @@ use crate::intercom::{ClientMsg, Error, ReplySendError, ReplyStreamHandle};
 use crate::utils::task::{Input, TokioServiceInfo};
 use chain_core::property::HasHeader;
 
-use futures::future::Either;
+use futures_03::stream::{Stream as Stream03, StreamExt as _, TryStreamExt as _};
 use tokio::prelude::*;
 use tokio::timer::Timeout;
+use tokio_compat::prelude::*;
 
 use std::time::Duration;
 
@@ -117,87 +118,85 @@ fn get_block_tip(blockchain_tip: &Tip) -> impl Future<Item = Header, Error = Err
         .and_then(|tip| Ok(tip.header().clone()))
 }
 
-fn handle_get_headers_range(
+async fn handle_get_headers_range(
     task_data: &TaskData,
     checkpoints: Vec<HeaderHash>,
     to: HeaderHash,
     handle: ReplyStreamHandle<Header>,
-) -> impl Future<Item = (), Error = ()> {
+) -> Result<(), ()> {
+    use futures_03::FutureExt;
+
     let storage = task_data.storage.clone();
-    storage
-        .find_closest_ancestor(checkpoints, to)
-        .then(move |res| match res {
-            Ok(maybe_ancestor) => {
-                let depth = maybe_ancestor.map(|ancestor| ancestor.distance);
-                let fut = storage
-                    .send_branch(
-                        to,
-                        depth,
-                        handle
-                            .with(|res: Result<Block, Error>| Ok(res.map(|block| block.header()))),
-                    )
-                    .then(|_: Result<_, ReplySendError>| Ok(()));
-                Either::A(fut)
-            }
-            Err(e) => Either::B(handle.async_error(e.into())),
-        })
+    match storage.find_closest_ancestor(checkpoints, to).await {
+        Ok(maybe_ancestor) => {
+            let depth = maybe_ancestor.map(|ancestor| ancestor.distance);
+            let sink = handle
+                .with(|res: Result<Block, Error>| -> Result<_, ReplySendError> {
+                    Ok(res.map(|block| block.header()))
+                })
+                .sink_compat();
+            storage.send_branch(to, depth, Box::pin(sink)).await;
+            Ok(())
+        }
+        Err(e) => handle.async_error(e.into()).compat().await,
+    }
 }
 
-fn get_blocks(storage: Storage, ids: Vec<HeaderHash>) -> impl Stream<Item = Block, Error = Error> {
-    stream::iter_ok(ids).and_then(move |id| {
-        storage
-            .get(id)
-            .map_err(Into::into)
-            .and_then(move |maybe_block| match maybe_block {
+fn get_blocks(
+    storage: Storage,
+    ids: Vec<HeaderHash>,
+) -> impl Stream03<Item = Result<Block, Error>> {
+    futures_03::stream::iter(ids).then(|id| {
+        async move {
+            match storage.get(id).await? {
                 Some(block) => Ok(block),
                 None => Err(Error::not_found(format!(
                     "block {} is not known to this node",
                     id
                 ))),
-            })
+            }
+        }
     })
 }
 
 fn get_headers(
     storage: Storage,
     ids: Vec<HeaderHash>,
-) -> impl Stream<Item = Header, Error = Error> {
-    stream::iter_ok(ids).and_then(move |id| {
-        storage
-            .get(id)
-            .map_err(Into::into)
-            .and_then(move |maybe_block| match maybe_block {
-                Some(block) => Ok(block.header()),
-                None => Err(Error::not_found(format!(
-                    "block {} is not known to this node",
-                    id
-                ))),
-            })
-    })
+) -> impl Stream03<Item = Result<Header, Error>> {
+    get_blocks(storage, ids).map_ok(|block| block.header())
 }
 
-fn handle_pull_blocks_to_tip(
+async fn handle_pull_blocks_to_tip(
     task_data: &TaskData,
     checkpoints: Vec<HeaderHash>,
     handle: ReplyStreamHandle<Block>,
-) -> impl Future<Item = (), Error = ()> {
-    let storage = task_data.storage.clone();
-    task_data
+) -> Result<(), ()> {
+    use crate::blockchain::StorageError;
+
+    let res = task_data
         .blockchain_tip
-        .get_ref()
-        .and_then(move |tip| {
-            let tip_hash = tip.hash();
-            storage
-                .find_closest_ancestor(checkpoints, tip_hash)
-                .map(move |maybe_ancestor| {
+        .get_ref::<StorageError>()
+        .compat()
+        .await;
+
+    match res {
+        Ok(tip) => {
+            let res = task_data
+                .storage
+                .find_closest_ancestor(checkpoints, tip.hash())
+                .await;
+            match res {
+                Ok(maybe_ancestor) => {
                     let depth = maybe_ancestor.map(|ancestor| ancestor.distance);
-                    (storage, tip_hash, depth)
-                })
-        })
-        .then(move |res| match res {
-            Ok((storage, to, depth)) => {
-                Either::A(storage.send_branch(to, depth, handle).then(|_| Ok(())))
+                    task_data
+                        .storage
+                        .send_branch(tip.hash(), depth, Box::pin(handle.sink_compat()))
+                        .await
+                        .map_err(|_| ())
+                }
+                Err(e) => handle.async_error(e.into()).compat().await,
             }
-            Err(e) => Either::B(handle.async_error(e.into())),
-        })
+        }
+        Err(e) => handle.async_error(e.into()).compat().await,
+    }
 }

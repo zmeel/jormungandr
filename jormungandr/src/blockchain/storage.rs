@@ -210,7 +210,7 @@ impl Storage {
         sink: Pin<Box<S>>,
     ) -> Result<(), S::Error>
     where
-        S: Sink<Result<Block, E>, Error = E>,
+        S: Sink<Result<Block, E>>,
         E: From<StorageError>,
     {
         let res = self
@@ -235,7 +235,7 @@ impl Storage {
                 }
             }
             Err(e) => {
-                sink.send_all(&mut stream::once(Box::pin(async { Err(e.into()) })))
+                sink.send_all(&mut stream::once(Box::pin(async { Ok(Err(e.into())) })))
                     .await?;
             }
         }
@@ -357,7 +357,7 @@ struct SendState<S, E> {
 
 impl<S, E> SendState<S, E>
 where
-    S: Sink<Result<Block, E>, Error = E>,
+    S: Sink<Result<Block, E>>,
     E: From<StorageError>,
 {
     async fn r#continue(&mut self) -> Result<bool, S::Error> {

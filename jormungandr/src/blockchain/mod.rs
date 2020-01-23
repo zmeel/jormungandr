@@ -34,6 +34,6 @@ pub use self::{
     multiverse::Multiverse,
     process::{process_new_ref, Process},
     reference::Ref,
-    storage::Storage,
+    storage::{Storage, StorageError},
     tip::Tip,
 };
