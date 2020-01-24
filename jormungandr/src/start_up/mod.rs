@@ -11,7 +11,7 @@ use chain_storage::store::BlockStore;
 use chain_storage_sqlite_old::{SQLiteBlockStore, SQLiteBlockStoreConnection};
 use slog::Logger;
 use std::time::Duration;
-use futures_03::executor::block_on;
+use futures03::executor::block_on;
 
 pub type NodeStorage = SQLiteBlockStore;
 pub type NodeStorageConnection = SQLiteBlockStoreConnection<Block>;

@@ -79,7 +79,6 @@ pub async fn bootstrap_from_peer(
 
 async fn bootstrap_from_stream<S>(
     blockchain: Blockchain,
-    branch: Tip,
     tip: Arc<Ref>,
     stream: S,
     logger: Logger,
@@ -88,7 +87,7 @@ where
     S: Stream<Item = Block, Error = NetworkError>,
     S::Error: Debug,
 {
-    use futures_03::stream::TryStreamExt;
+    use futures03::stream::TryStreamExt;
 
     let fold_logger = logger.clone();
 

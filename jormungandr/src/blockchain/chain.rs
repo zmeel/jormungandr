@@ -61,7 +61,7 @@ use crate::{
 use chain_impl_mockchain::{leadership::Verification, ledger};
 use chain_storage::error::Error as StorageError;
 use chain_time::TimeFrame;
-use futures_03::stream::{Stream as Stream03, StreamExt as StreamExt03};
+use futures03::stream::{Stream as Stream03, StreamExt as StreamExt03};
 use std::{convert::Infallible, sync::Arc, time::Duration};
 use tokio::prelude::*;
 use tokio_compat::prelude::*;
@@ -615,7 +615,7 @@ impl Blockchain {
     /// * other errors while interacting with the storage (IO errors)
     ///
     pub async fn load_from_storage(&self, block0: Block) -> Result<Branch> {
-        use futures_03::prelude::*;
+        use futures03::prelude::*;
 
         let block0_header = block0.header.clone();
         let block0_id = block0_header.hash();

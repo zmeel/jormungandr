@@ -171,9 +171,9 @@ impl TokioServiceInfo {
     /// spawn a future within the service's tokio executor
     pub fn spawn<F>(&self, future: F)
     where
-        F: Future<Item = (), Error = ()> + Send + 'static,
+        F: futures03::Future + Send + 'static,
     {
-        tokio::spawn(future);
+        tokio_02::spawn(future);
     }
 }
 

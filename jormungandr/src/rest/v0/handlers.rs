@@ -123,7 +123,6 @@ async fn create_stats(context: &FullContext) -> Result<serde_json::Value, Error>
         .blockchain
         .storage()
         .get(tip.hash())
-        .compat()
         .await
         .map_err(ErrorInternalServerError)?
         .ok_or(ErrorInternalServerError("Could not find block for tip"))?
@@ -185,7 +184,6 @@ pub async fn get_block_id(
         .blockchain
         .storage()
         .get(parse_block_hash(&block_id_hex)?)
-        .compat()
         .await
         .map_err(ErrorInternalServerError)?
         .ok_or(ErrorNotFound("Block not found"))?
@@ -199,14 +197,17 @@ pub async fn get_block_next_id(
     block_id_hex: Path<String>,
     query_params: Query<QueryParams>,
 ) -> Result<impl Responder, Error> {
+    use futures03::{StreamExt, TryStreamExt};
+    use std::convert::TryInto;
+
     let full_context = context.try_full()?;
     let block_id = parse_block_hash(&block_id_hex)?;
     let tip = chain_tip_from_full(&full_context).await?;
+
     full_context
         .blockchain
         .storage()
         .stream_from_to(block_id, tip.hash())
-        .compat()
         .await
         .map_err(|e| match e {
             StorageError::CannotIterate => ErrorNotFound("Block is not in chain of the tip"),
@@ -214,12 +215,13 @@ pub async fn get_block_next_id(
             _ => ErrorInternalServerError(e),
         })?
         .map_err(ErrorInternalServerError)
-        .take(query_params.get_count())
-        .fold(BytesMut::new(), |mut bytes, block| {
-            bytes.extend_from_slice(block.id().as_ref());
-            Result::<BytesMut, Error>::Ok(bytes)
+        .take(query_params.get_count().try_into().unwrap())
+        .try_fold(BytesMut::new(), |mut bytes, block| {
+            async move {
+                bytes.extend_from_slice(block.id().as_ref());
+                Result::<BytesMut, Error>::Ok(bytes)
+            }
         })
-        .compat()
         .await
 }
 

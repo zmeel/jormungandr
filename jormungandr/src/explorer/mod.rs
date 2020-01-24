@@ -130,7 +130,7 @@ impl Explorer {
                     Ok(_gc_root) => Ok(()),
                     Err(err) => Err(error!(logger, "Explorer error: {}", err)),
                 },
-            )),
+            ).compat()),
         }
         future::ok::<(), ()>(())
     }
@@ -141,7 +141,7 @@ impl ExplorerDB {
     /// Blockchain settings from the Block0 (Discrimination)
     /// This function is only called once on the node's bootstrap phase
     pub fn bootstrap(block0: Block, blockchain: &Blockchain) -> Result<Self> {
-        use futures_03::{executor::block_on, stream::TryStreamExt};
+        use futures03::{executor::block_on, stream::TryStreamExt};
 
         let blockchain_config = BlockchainConfig::from_config_params(
             block0

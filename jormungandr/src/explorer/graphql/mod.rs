@@ -15,7 +15,7 @@ use cardano_legacy_address::Addr as OldAddress;
 use chain_impl_mockchain::certificate;
 use chain_impl_mockchain::leadership::bft;
 use chain_impl_mockchain::ledger;
-use futures_03::executor::block_on;
+use futures03::executor::block_on;
 pub use juniper::http::GraphQLRequest;
 use juniper::{graphql_union, EmptyMutation, FieldResult, RootNode};
 use std::convert::TryFrom;

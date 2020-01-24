@@ -13,6 +13,7 @@ use std::{
     fmt::{self, Debug, Display},
     marker::PhantomData,
 };
+use tokio_compat::prelude::*;
 
 /// The error values passed via intercom messages.
 #[derive(Debug)]
@@ -289,11 +290,13 @@ pub struct ReplyStreamHandle<T> {
 }
 
 impl<T> ReplyStreamHandle<T> {
-    pub fn async_reply<S>(self, stream: S) -> impl Future<Item = (), Error = ()>
+    pub async fn async_reply<S>(self, stream: S) -> Result<(), ()>
     where
-        S: Stream<Item = T, Error = Error>,
+        S: futures03::Stream<Item = Result<T, Error>> + std::marker::Unpin,
     {
-        self.sender.send_all(stream.then(Ok)).then(|_| Ok(()))
+        use futures03::{StreamExt, SinkExt};
+        self.sender.sink_compat().send_all(&mut stream.map(Ok)).await;
+        Ok(())
     }
 
     pub fn async_error(self, err: Error) -> impl Future<Item = (), Error = ()> {

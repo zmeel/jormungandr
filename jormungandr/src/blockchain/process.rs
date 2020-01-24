@@ -73,7 +73,10 @@ impl Process {
         service_info: TokioServiceInfo,
         input: MessageQueue<BlockMsg>,
     ) -> impl Future<Item = (), Error = ()> {
-        service_info.spawn(self.start_branch_reprocessing(service_info.logger().clone()));
+        service_info.spawn(
+            self.start_branch_reprocessing(service_info.logger().clone())
+                .compat(),
+        );
         let pull_headers_scheduler = self.spawn_pull_headers_scheduler(&service_info);
         let get_next_block_scheduler = self.spawn_get_next_block_scheduler(&service_info);
         input.for_each(move |msg| {
@@ -94,6 +97,9 @@ impl Process {
         pull_headers_scheduler: &PullHeadersScheduler,
         get_next_block_scheduler: &GetNextBlockScheduler,
     ) {
+        use futures03::{TryFutureExt, FutureExt};
+        use tokio_02::time::{timeout, Elapsed};
+
         let blockchain = self.blockchain.clone();
         let blockchain_tip = self.blockchain_tip.clone();
         let network_msg_box = self.network_msgbox.clone();
@@ -117,11 +123,17 @@ impl Process {
 
                 let fragments = block.fragments().map(|f| f.id()).collect();
 
-                let update_mempool = process_new_block.and_then(move |new_block_ref| {
-                    debug!(logger2, "updating fragment's log");
-                    try_request_fragment_removal(&mut tx_msg_box, fragments, new_block_ref.header())
+                let update_mempool = process_new_block.and_then(|new_block_ref| {
+                    async move {
+                        debug!(logger2, "updating fragment's log");
+                        try_request_fragment_removal(
+                            &mut tx_msg_box,
+                            fragments,
+                            new_block_ref.header(),
+                        )
                         .map_err(|_| "cannot remove fragments from pool".into())
                         .map(|_| new_block_ref)
+                    }
                 });
 
                 let process_new_ref = update_mempool.and_then(move |new_block_ref| {
@@ -146,14 +158,16 @@ impl Process {
                     } else {
                         Either::B(future::ok(()))
                     }
+                    .compat()
                 });
 
-                info.spawn(
-                    Timeout::new(notify_explorer, Duration::from_secs(DEFAULT_TIMEOUT_PROCESS_LEADERSHIP))
-                        .map_err(move |err: TimeoutError| {
-                            error!(logger, "cannot process leadership block" ; "reason" => ?err)
-                        })
+                info.spawn(timeout(
+                    Duration::from_secs(DEFAULT_TIMEOUT_PROCESS_LEADERSHIP),
+                    notify_explorer,
                 )
+                .map_err(
+                    move |err| error!(logger, "cannot process leadership block" ; "reason" => ?err),
+                ))
             }
             BlockMsg::AnnouncedBlock(header, node_id) => {
                 let logger = info.logger().new(o!(
@@ -174,7 +188,7 @@ impl Process {
                     logger.clone(),
                 );
 
-                info.spawn(Timeout::new(future, Duration::from_secs(DEFAULT_TIMEOUT_PROCESS_ANNOUNCEMENT)).map_err(move |err: TimeoutError| {
+                info.spawn(timeout(Duration::from_secs(DEFAULT_TIMEOUT_PROCESS_ANNOUNCEMENT), future).map_err(move |err| {
                     error!(logger, "cannot process block announcement" ; "reason" => ?err)
                 }))
             }

@@ -4,7 +4,7 @@ use crate::intercom::{ClientMsg, Error, ReplySendError, ReplyStreamHandle};
 use crate::utils::task::{Input, TokioServiceInfo};
 use chain_core::property::HasHeader;
 
-use futures_03::stream::{Stream as Stream03, StreamExt as _, TryStreamExt as _};
+use futures03::stream::{Stream as Stream03, StreamExt as _, TryStreamExt as _};
 use tokio::prelude::*;
 use tokio::timer::Timeout;
 use tokio_compat::prelude::*;
@@ -49,7 +49,7 @@ pub fn handle_input(
             );
         }
         ClientMsg::GetHeaders(ids, handle) => {
-            let fut = handle.async_reply(get_headers(task_data.storage.clone(), ids));
+            let fut = handle.async_reply(Box::pin(get_headers(task_data.storage.clone(), ids)));
             let logger = info.logger().new(o!("request" => "GetHeaders"));
             info.spawn(
                 Timeout::new(fut, Duration::from_secs(PROCESS_TIMEOUT_GET_HEADERS)).map_err(
@@ -79,7 +79,7 @@ pub fn handle_input(
             );
         }
         ClientMsg::GetBlocks(ids, handle) => {
-            let fut = handle.async_reply(get_blocks(task_data.storage.clone(), ids));
+            let fut = handle.async_reply(Box::pin(get_blocks(task_data.storage.clone(), ids)));
             let logger = info.logger().new(o!("request" => "GetBlocks"));
             info.spawn(
                 Timeout::new(fut, Duration::from_secs(PROCESS_TIMEOUT_GET_BLOCKS)).map_err(
@@ -124,7 +124,7 @@ async fn handle_get_headers_range(
     to: HeaderHash,
     handle: ReplyStreamHandle<Header>,
 ) -> Result<(), ()> {
-    use futures_03::FutureExt;
+    use futures03::FutureExt;
 
     let storage = task_data.storage.clone();
     match storage.find_closest_ancestor(checkpoints, to).await {
@@ -146,7 +146,7 @@ fn get_blocks(
     storage: Storage,
     ids: Vec<HeaderHash>,
 ) -> impl Stream03<Item = Result<Block, Error>> {
-    futures_03::stream::iter(ids).then(|id| {
+    futures03::stream::iter(ids).then(|id| {
         async move {
             match storage.get(id).await? {
                 Some(block) => Ok(block),
