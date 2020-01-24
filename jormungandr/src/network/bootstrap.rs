@@ -49,7 +49,7 @@ pub async fn bootstrap_from_peer(
 ) -> Result<Arc<Ref>, Error> {
     info!(logger, "connecting to bootstrap peer {}", peer.connection);
 
-    let bootstrap = grpc::connect(peer.address(), None)
+    let (client, tip) = grpc::connect(peer.address(), None)
         .map_err(|e| Error::Connect { source: e })
         .and_then(|client: Connection<BlockConfig>| {
             client
@@ -57,63 +57,63 @@ pub async fn bootstrap_from_peer(
                 .map_err(|e| Error::ClientNotReady { source: e })
         })
         .join(branch.get_ref())
-        .and_then(move |(mut client, tip)| {
-            let tip_hash = tip.hash();
-            debug!(logger, "pulling blocks starting from {}", tip_hash);
-            client
-                .pull_blocks_to_tip(&[tip_hash])
-                .map_err(|e| Error::PullRequestFailed { source: e })
-                .and_then(move |stream| {
-                    bootstrap_from_stream(blockchain, branch, tip, stream, logger)
-                })
-        });
+        .compat()
+        .await?;
 
-    bootstrap.compat().await
+    let tip_hash = tip.hash();
+    debug!(logger, "pulling blocks starting from {}", tip_hash);
+
+    let stream = client
+        .pull_blocks_to_tip(&[tip_hash])
+        .compat()
+        .await
+        .map_err(|e| Error::PullRequestFailed { source: e })?;
+
+    let tip = bootstrap_from_stream(blockchain, tip, stream, logger).await?;
+
+    blockchain::process_new_ref(logger, blockchain, branch, tip.clone())
+        .await
+        .map_err(|e| Error::ChainSelectionFailed { source: e })
+        .map(|()| tip)
 }
 
-fn bootstrap_from_stream<S>(
+async fn bootstrap_from_stream<S>(
     blockchain: Blockchain,
     branch: Tip,
     tip: Arc<Ref>,
     stream: S,
     logger: Logger,
-) -> impl Future<Item = Arc<Ref>, Error = Error>
+) -> Result<Arc<Ref>, Error>
 where
     S: Stream<Item = Block, Error = NetworkError>,
     S::Error: Debug,
 {
+    use futures_03::stream::TryStreamExt;
+
+    let fold_logger = logger.clone();
+
     let block0 = blockchain.block0().clone();
     let logger2 = logger.clone();
     let blockchain2 = blockchain.clone();
 
     stream
+        .compat()
         .map_err(|e| Error::PullStreamFailed { source: e })
-        .filter(move |block| block.header.hash() != block0)
-        .and_then(move |block| handle_block(blockchain.clone(), block, logger.clone()))
-        .fold((tip, 0), move |(_old_tip, counter), new_tip| {
-            use futures::future::Either::{A, B};
-
-            if counter >= APPLY_FREQUENCY_BOOTSTRAP {
-                A(future::ok((new_tip, counter + 1)))
-            } else {
-                B(blockchain::process_new_ref(
-                    logger2.clone(),
-                    blockchain2.clone(),
-                    branch.clone(),
-                    new_tip.clone(),
-                )
-                .map_err(|e| Error::ChainSelectionFailed { source: e })
-                .map(|()| (new_tip, 0)))
-            }
+        .try_filter(move |block| {
+            let header_hash = block.header.hash();
+            async move { header_hash != block0 }
         })
-        .map(|(tip, _)| tip)
+        .try_fold(tip, |_, block| {
+            async move { handle_block(blockchain.clone(), block, fold_logger.clone()).await }
+        })
+        .await
 }
 
-fn handle_block(
+async fn handle_block(
     blockchain: Blockchain,
     block: Block,
     logger: Logger,
-) -> impl Future<Item = Arc<Ref>, Error = Error> {
+) -> Result<Arc<Ref>, Error> {
     let header = block.header();
     trace!(
         logger,
@@ -121,32 +121,35 @@ fn handle_block(
         header
     );
     let end_blockchain = blockchain.clone();
-    blockchain
+    let pre_checked = blockchain
         .pre_check_header(header, true)
-        .map_err(|e| Error::HeaderCheckFailed { source: e })
-        .and_then(|pre_checked| match pre_checked {
-            PreCheckedHeader::AlreadyPresent { header, .. } => {
-                Err(Error::BlockAlreadyPresent(header.hash()))
-            }
-            PreCheckedHeader::MissingParent { header, .. } => {
-                Err(Error::BlockMissingParent(header.hash()))
-            }
-            PreCheckedHeader::HeaderWithCache { header, parent_ref } => Ok((header, parent_ref)),
-        })
-        .and_then(move |(header, parent_ref)| {
-            blockchain
-                .post_check_header(header, parent_ref)
-                .map_err(|e| Error::HeaderCheckFailed { source: e })
-        })
-        .and_then(move |post_checked| {
-            debug!(
-                logger,
-                "validated block";
-                "hash" => %post_checked.header().hash(),
-                "block_date" => %post_checked.header().block_date(),
-            );
-            end_blockchain
-                .apply_and_store_block(post_checked, block)
-                .map_err(|e| Error::ApplyBlockFailed { source: e })
-        })
+        .await
+        .map_err(|e| Error::HeaderCheckFailed { source: e })?;
+    let (header, parent_ref) = match pre_checked {
+        PreCheckedHeader::AlreadyPresent { header, .. } => {
+            return Err(Error::BlockAlreadyPresent(header.hash()))
+        }
+        PreCheckedHeader::MissingParent { header, .. } => {
+            return Err(Error::BlockMissingParent(header.hash()))
+        }
+        PreCheckedHeader::HeaderWithCache { header, parent_ref } => (header, parent_ref),
+    };
+
+    let post_checked = blockchain
+        .post_check_header(header, parent_ref)
+        .compat()
+        .await
+        .map_err(|e| Error::HeaderCheckFailed { source: e })?;
+
+    debug!(
+        logger,
+        "validated block";
+        "hash" => %post_checked.header().hash(),
+        "block_date" => %post_checked.header().block_date(),
+    );
+
+    end_blockchain
+        .apply_and_store_block(post_checked, block)
+        .await
+        .map_err(|e| Error::ApplyBlockFailed { source: e })
 }

@@ -28,6 +28,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::prelude::*;
 use tokio::sync::lock::{Lock, LockGuard};
+use tokio_compat::prelude::*;
 
 #[derive(Clone)]
 pub struct Explorer {
@@ -140,6 +141,8 @@ impl ExplorerDB {
     /// Blockchain settings from the Block0 (Discrimination)
     /// This function is only called once on the node's bootstrap phase
     pub fn bootstrap(block0: Block, blockchain: &Blockchain) -> Result<Self> {
+        use futures_03::{executor::block_on, stream::TryStreamExt};
+
         let blockchain_config = BlockchainConfig::from_config_params(
             block0
                 .contents
@@ -195,29 +198,33 @@ impl ExplorerDB {
             blockchain: blockchain.clone(),
         };
 
-        blockchain
-            .storage()
-            .get_tag(MAIN_BRANCH_TAG.to_owned())
-            .map_err(|err| err.into())
-            .and_then(move |head_option| match head_option {
-                None => Either::A(future::err(Error::from(ErrorKind::BootstrapError(
-                    "Couldn't read the HEAD tag from storage".to_owned(),
-                )))),
-                Some(head) => Either::B(
-                    blockchain
-                        .storage()
-                        .stream_from_to(block0_id, head)
-                        .map_err(|err| Error::from(err)),
-                ),
-            })
-            .and_then(move |stream| {
-                stream
-                    .map_err(|err| Error::from(err))
-                    .fold(bootstraped_db, |mut db, block| {
-                        db.apply_block(block).and_then(|_gc_root| Ok(db))
-                    })
-            })
-            .wait()
+        block_on(async move {
+            let maybe_head = blockchain
+                .storage()
+                .get_tag(MAIN_BRANCH_TAG.to_owned())
+                .await
+                .map_err(Error::from)?;
+
+            let stream = match maybe_head {
+                Some(head) => blockchain
+                    .storage()
+                    .stream_from_to(block0_id, head)
+                    .await
+                    .map_err(Error::from)?,
+                None => {
+                    return Err(Error::from(ErrorKind::BootstrapError(
+                        "Couldn't read the HEAD tag from storage".to_owned(),
+                    )))
+                }
+            };
+
+            stream
+                .map_err(Error::from)
+                .try_fold(bootstraped_db, |mut db, block| {
+                    async move { db.apply_block(block).compat().await.and_then(|_| Ok(db)) }
+                })
+                .await
+        })
     }
 
     /// Try to add a new block to the indexes, this can fail if the parent of the block is
