@@ -31,6 +31,7 @@ imhamt = { path = "../chain-deps/imhamt" }
 error-chain = "0.12"
 futures    = "0.1"
 futures03 = { package = "futures", version = "0.3.1", features = ["compat"] }
+futures-util = "0.3.1"
 http = "0.1.16"
 humantime = "1.2"
 hyper = "0.12"
