@@ -169,11 +169,19 @@ impl TokioServiceInfo {
     }
 
     /// spawn a future within the service's tokio executor
-    pub fn spawn<F>(&self, future: F)
+    pub fn spawn<F>(&self, name: &'static str, future: F)
     where
         F: Future<Item = (), Error = ()> + Send + 'static,
     {
-        tokio::spawn(future);
+        let logger = self.logger.clone();
+        trace!(logger, "spawning {}", name);
+        tokio::spawn(future.then(move |res| {
+            match res {
+                Ok(()) => trace!(logger, "{} finished successfully", name),
+                Err(()) => trace!(logger, "{} finished with error", name),
+            }
+            res
+        }));
     }
 }
 
